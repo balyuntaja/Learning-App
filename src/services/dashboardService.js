@@ -1,83 +1,121 @@
-import pool from "../config/db.js";
+import pool from "../db/pool.js";
+import { Q } from "../db/queries.js";
+import { buildMlPayload } from "../utils/mapping.js";
+import { callML } from "../utils/mlClient.js";
 
-export const getDashboardData = async (userId) => {
-  // 1. User Profile
-  const user = await pool.query(
-    `SELECT id, name, display_name, image_path 
-     FROM users WHERE id = $1`,
-    [userId]
-  );
+export async function getDashboardData(email) {
+  const client = await pool.connect();
 
-  // 2. Latest AI Insight
-  const insight = await pool.query(
-    `SELECT * FROM ai_learning_insights 
-     WHERE user_id = $1
-     ORDER BY generated_at DESC
-     LIMIT 1`,
-    [userId]
-  );
+  try {
+    /** 1. Get user */
+    const userRes = await client.query(Q.user_by_email, [email]);
+    const user = userRes.rows[0];
+    if (!user) return { success: false, status: 404, message: "User not found" };
 
-  // 3. Study Time Chart
-  const studyTime = await pool.query(
-    `SELECT DATE(first_opened_at) AS day, COUNT(*) AS total
-     FROM developer_journey_trackings
-     WHERE developer_id = $1
-     GROUP BY day
-     ORDER BY day`,
-    [userId]
-  );
+    const userId = user.id;
 
-  // 4. Completion Speed Chart
-  const completionSpeed = await pool.query(
-    `SELECT DATE(completed_at) AS day, COUNT(*) AS completed
-     FROM developer_journey_trackings
-     WHERE developer_id = $1 AND completed_at IS NOT NULL
-     GROUP BY day
-     ORDER BY day`,
-    [userId]
-  );
+    /** 2. Get last activity */
+    const lastAct = (await client.query(Q.lastActivity, [userId])).rows[0]?.last_activity;
+    if (!lastAct) return { success: true, user, insight: null, dashboard: {} };
 
-  // 5. Average Quiz Score
-  const avgQuiz = await pool.query(
-    `SELECT AVG(score) AS average_score
-     FROM exam_results
-     WHERE exam_registration_id IN (
-        SELECT id FROM exam_registrations 
-        WHERE examinees_id = $1
-     )`,
-    [userId]
-  );
+    const weekEnd = new Date(lastAct);
+    const weekStart = new Date(lastAct);
+    weekStart.setDate(weekStart.getDate() - 7);
 
-  // 6. Journey Progress
-  const journeys = await pool.query(
-    `SELECT 
-        dj.id,
-        dj.name,
-        dj.image_path,
-        dj.difficulty,
-        dj.hours_to_study,
-        COALESCE(djt.completed_count, 0) AS completed_modules,
-        djc.study_duration
-     FROM developer_journeys dj
-     LEFT JOIN (
-        SELECT journey_id, COUNT(*) AS completed_count
-        FROM developer_journey_trackings
-        WHERE developer_id = $1 AND completed_at IS NOT NULL
-        GROUP BY journey_id
-     ) djt ON djt.journey_id = dj.id
-     LEFT JOIN developer_journey_completions djc
-        ON djc.journey_id = dj.id AND djc.user_id = $1`,
-    [userId]
-  );
+    /** 3. Weekly queries */
+    const [trackingsQ, submissionsQ, completionsQ, examRegsQ] = await Promise.all([
+      client.query(Q.trackingsByRange, [userId, weekStart, weekEnd]),
+      client.query(Q.submissionsByRange, [userId, weekStart, weekEnd]),
+      client.query(Q.completionsByRange, [userId, weekStart, weekEnd]),
+      client.query(Q.examRegsByRange, [userId, weekStart, weekEnd]),
+    ]);
 
-  return {
-    user: user.rows[0] || null,
-    insight: insight.rows[0] || null,
-    charts: {
-      study_time: studyTime.rows,
-      completion_speed: completionSpeed.rows,
-      quiz_results: avgQuiz.rows[0],
-    },
-    journeys: journeys.rows,
-  };
-};
+    /** 4. Journeys */
+    const journeyRows = (await client.query(Q.journeys_by_user, [userId, weekStart, weekEnd])).rows;
+    const journeyIds = journeyRows.map(j => j.id);
+
+    /** 5. Weekly tutorial records (with titles) */
+    const weeklyTutorials = (await client.query(Q.weeklyTutorials, [userId, weekStart, weekEnd])).rows;
+
+    /** 6. Weekly completed count */
+    const weeklyCompleted = new Map(
+      (await client.query(Q.weeklyCompletedTutorials, [userId, weekStart, weekEnd]))
+        .rows.map(r => [Number(r.journey_id), Number(r.completed)])
+    );
+
+    /** 7. Lifetime tutorial totals */
+    const totalTutorialsMap = new Map(
+      (await client.query(Q.totalTutorialsByJourney))
+        .rows.map(r => [Number(r.journey_id), Number(r.total)])
+    );
+
+    /** 8. Progress build */
+    const journeysWithProgress = journeyRows.map(j => {
+      const jid = Number(j.id);
+      const total = totalTutorialsMap.get(jid) ?? 0;
+      const wc = weeklyCompleted.get(jid) ?? 0;
+
+      return {
+        ...j,
+        total_tutorials: total,
+        weekly_completed: wc,
+        weekly_progress_percentage: total > 0 ? (wc / total) * 100 : 0,
+      };
+    });
+
+    /** 9. Exam results */
+    let examResults = [];
+    if (examRegsQ.rows.length > 0) {
+      const regIds = examRegsQ.rows.map(r => r.id);
+      examResults = (await client.query(Q.examResultsByRegIds, [regIds])).rows;
+    }
+
+    /** 10. ALL tutorials for ML */
+    const allTutorials = journeyIds.length
+      ? (await client.query(Q.allTutorialsByUserJourney, [journeyIds])).rows
+      : [];
+
+    /** 11. Build ML payload */
+    const mlPayload = buildMlPayload({
+      userRow: user,
+      trackingRows: trackingsQ.rows,
+      submissionRows: submissionsQ.rows,
+      completionRows: completionsQ.rows,
+      journeyRows,
+      tutorialRows: allTutorials,   // << FIXED
+      examRegistrationRows: examRegsQ.rows,
+      examResultRows: examResults
+    });
+
+    const mlData = await callML(mlPayload);
+
+    /** 12. Save ML insight */
+    const savedInsight = (await client.query(Q.insert_insight, [
+      mlData.user_id ?? userId,
+      mlData.category ?? null,
+      mlData.insight_message ?? null,
+      JSON.stringify(mlData.metrics ?? mlData)
+    ])).rows[0];
+
+    /** 13. Final output */
+    return {
+      success: true,
+      user,
+      insight: savedInsight,
+      dashboard: {
+        week_start: weekStart,
+        week_end: weekEnd,
+        journeys: journeysWithProgress,
+        tutorials: weeklyTutorials,
+        trackings: trackingsQ.rows,
+        submissions: submissionsQ.rows,
+        completions: completionsQ.rows,
+        exam_registrations: examRegsQ.rows,
+        exam_results: examResults
+      }
+    };
+
+  } finally {
+    client.release();
+  }
+}

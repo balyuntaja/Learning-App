@@ -1,21 +1,34 @@
 import { getDashboardData } from "../services/dashboardService.js";
 
-export const dashboard = async (req, res) => {
+export async function getDashboard(req, res) {
   try {
-    const userId = req.user.id; // dari middleware auth
+    const { email } = req.body;
 
-    const data = await getDashboardData(userId);
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Email is required"
+      });
+    }
 
-    res.json({
-      success: true,
-      data
-    });
+    const result = await getDashboardData(email);
 
+    if (!result.success) {
+      const status = result.status ?? 500;
+      return res.status(status).json({
+        success: false,
+        message: result.message ?? "Internal server error"
+      });
+    }
+
+    return res.json(result);
   } catch (err) {
-    console.error("Dashboard Error:", err);
-    res.status(500).json({
+    console.error("Dashboard controller error:", err?.response?.data ?? err);
+    return res.status(500).json({
       success: false,
-      message: "Internal server error"
+      message: "Internal server error",
+      error: err.message ?? String(err)
     });
   }
-};
+}
+
