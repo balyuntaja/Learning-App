@@ -17,6 +17,14 @@ app.use(
 
 app.use(express.json());
 
+app.get("/", (req, res) => {
+  res.send(`
+    <h1>AI Learning Insight API</h1>
+    <p>Status: <strong>Running</strong></p>
+    <p>Available endpoint: <code>/dashboard</code></p>
+  `);
+});
+
 app.use("/dashboard", dashboardRoutes);
 
 export default app;
