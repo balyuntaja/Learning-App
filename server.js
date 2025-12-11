@@ -1,6 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import dashboardRoutes from "./src/routes/dashboardRoutes.js";
+import authRoutes from "./src/routes/authRoutes.js";
 import cors from "cors";
 
 dotenv.config();
@@ -67,6 +68,13 @@ app.get("/", (req, res) => {
   `);
 });
 
+app.use("/auth", authRoutes);
+
 app.use("/dashboard", dashboardRoutes);
+
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`Server berjalan pada http://localhost:${PORT}`);
+});
 
 export default app;
