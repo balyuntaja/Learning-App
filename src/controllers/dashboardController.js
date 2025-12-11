@@ -2,14 +2,8 @@ import { getDashboardData } from "../services/dashboardService.js";
 
 export async function getDashboard(req, res) {
   try {
-    const { email } = req.body;
-
-    if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: "Email is required"
-      });
-    }
+    
+    const email = req.user.email;
 
     const result = await getDashboardData(email);
 
@@ -22,6 +16,7 @@ export async function getDashboard(req, res) {
     }
 
     return res.json(result);
+
   } catch (err) {
     console.error("Dashboard controller error:", err?.response?.data ?? err);
     return res.status(500).json({
@@ -31,4 +26,3 @@ export async function getDashboard(req, res) {
     });
   }
 }
-
