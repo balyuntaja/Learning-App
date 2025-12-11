@@ -1,6 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import dashboardRoutes from "./src/routes/dashboardRoutes.js";
+import cors from "cors";
 
 dotenv.config();
 
@@ -18,7 +19,4 @@ app.use(express.json());
 
 app.use("/dashboard", dashboardRoutes);
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Dashboard service listening on ${PORT}`);
-});
+export default app;
