@@ -56,9 +56,17 @@ export const Q = {
   `,
 
   examResultsByRegIds: `
-    SELECT *
-    FROM exam_results
-    WHERE exam_registration_id = ANY($1::bigint[])
+    SELECT 
+  r.exam_registration_id,
+  er.*,
+  r.score,
+  r.total_questions,
+  r.is_passed,
+  d.title AS quiz_title
+  FROM exam_results r
+    JOIN exam_registrations er ON er.id = r.exam_registration_id
+    JOIN developer_journey_tutorials d ON d.id = er.tutorial_id
+    WHERE r.exam_registration_id = ANY($1::bigint[]);
   `,
 
   /* -------------------------------------------
@@ -111,13 +119,14 @@ export const Q = {
    * WEEKLY COMPLETED COUNT
    * ------------------------------------------- */
   weeklyCompletedTutorials: `
-    SELECT journey_id, COUNT(*) AS completed
-    FROM developer_journey_trackings
-    WHERE developer_id = $1
-      AND status = 1
-      AND completed_at BETWEEN $2 AND $3
-    GROUP BY journey_id
-  `,
+  SELECT journey_id, COUNT(DISTINCT tutorial_id) AS completed
+  FROM developer_journey_trackings
+  WHERE developer_id = $1
+    AND status = 1
+    AND completed_at BETWEEN $2 AND $3
+  GROUP BY journey_id
+`,
+
 
   /* -------------------------------------------
    * ALL TUTORIALS PER JOURNEY (for ML)
