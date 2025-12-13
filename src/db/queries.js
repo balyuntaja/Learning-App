@@ -3,7 +3,7 @@ export const Q = {
    * USER
    * ------------------------------------------- */
   user_by_email: `
-    SELECT id, email, display_name, image_path, created_at
+    SELECT id, email, display_name, name, image_path, created_at
     FROM users
     WHERE email = $1
     LIMIT 1
